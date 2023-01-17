@@ -23,8 +23,11 @@
 //#include <libgen.h>
 #include "proto.h"
 
+#ifdef MAX_PATH_LEN
+#undef MAX_PATH_LEN
+#endif
 #define MAX_PATH_LEN 108
-#define MAX_BACK_LOG 1024
+#define MAX_BACK_LOG 64
 #define PROCESS_TIMEOUT 200u
 
 #define FCGI_CLIENT_REQUEST_SENT (0)
@@ -39,12 +42,26 @@ typedef struct {
     // only for TCP socket
     int port;
     // server fd
-    // int fd;
+    int fd;
     // pid of the application process
-    // pid_t pid;
+    pid_t pid;
 } fcgi_config_t;
 
 static fcgi_config_t g_config;
+
+static int mk_socket();
+static int read_config();
+static int open_un_socket();
+static int open_tcp_socket();
+static int open_socket();
+static char* read_line(char** buff, int* size);
+static int read_header(antd_client_t* cl, antd_request_t* rq);
+static int read_data(antd_client_t* cl, antd_request_t* rq);
+static void *process(void *data);
+static int send_request(antd_client_t *cl, antd_request_t* rq);
+void* handle(void* data);
+static int mk_un_socket();
+static int mk_tcp_socket();
 
 static int read_config()
 {
@@ -52,13 +69,13 @@ static int read_config()
     (void*) memset(g_config.app_bin, 0, MAX_PATH_LEN);
     (void*) memset(g_config.address, 0, MAX_PATH_LEN);
     g_config.port = -1;
-    //g_config.fd = -1;
-    //g_config.pid = -1;
+    g_config.fd = -1;
+    g_config.pid = -1;
     regmatch_t regex_matches[3];
     // read plugin configuration
     if(!__plugin__.config)
     {
-        PLUGIN_PANIC("No plugin configuration found. Please specify it it server config file");
+        PLUGIN_PANIC("No plugin configuration found. Please specify it in server config file");
         return -1;
     }
     tmp = (char*) dvalue(__plugin__.config, "socket");
@@ -96,20 +113,127 @@ static int read_config()
         return -1;
     }
     tmp = (char*) dvalue(__plugin__.config, "bin");
-    if(!tmp)
+    if(tmp)
     {
-        PLUGIN_PANIC("No FastCGI application configuration found (bin)");
-        return -1;
+        if(strlen(tmp) > MAX_PATH_LEN - 1)
+        {
+            PLUGIN_PANIC("Bin application configuration is too long: %s", tmp);
+            return -1;
+        }
+        snprintf(g_config.app_bin, MAX_PATH_LEN,"%s", tmp);
+        LOG("Binary application configuration: %s", g_config.app_bin);
+        // create the server socket then launched it
+        g_config.fd = mk_socket();
+        if(g_config.fd == -1)
+        {
+            PLUGIN_PANIC("Unable to create FastCGI server socket");
+            return -1;
+        }
+        // launch the application
+        g_config.pid = fork();
+        if(g_config.pid == -1)
+        {
+            PLUGIN_PANIC("Unable to create FastCGI server socket");
+            close(g_config.fd);
+            g_config.fd = -1;
+            g_config.pid = -1;
+            return -1;
+        }
+        if(g_config.pid == 0)
+        {
+            // child
+            // close the original stdin
+            close(0);
+            // redirect the stdin to the socket
+            dup2(g_config.fd, 0);
+            char *argv[] = {g_config.app_bin, 0};
+            char *env[] = {NULL, NULL};
+            env[0] = getenv("ANTD_DEBUG");
+            if(env[0] && (
+                (strcmp(env[0], "1") == 0) || (strcmp(env[0], "true") == 0)) )
+            {
+                env[0] = "debug=1";
+            }
+            else
+            {
+                env[0] = "debug=0";
+            }
+            execve(argv[0], &argv[0], &env[0]);
+            _exit(1);
+        }
+        // parent
+        LOG("FastCGI process (%d) created", g_config.pid);
     }
-    if(strlen(tmp) > MAX_PATH_LEN - 1)
-    {
-        PLUGIN_PANIC("Bin applicqtion configuration is too long: %s", tmp);
-        return -1;
-    }
-    snprintf(g_config.app_bin, MAX_PATH_LEN,"%s", tmp);
-    LOG("Binary application configuration: %s", g_config.app_bin);
     return 0;
 }
+
+static int mk_un_socket()
+{
+    struct sockaddr_un address;
+    address.sun_family = AF_UNIX;
+    //remove socket file if exists
+    (void) remove(g_config.address);
+    // create the socket
+    (void)strncpy(address.sun_path, g_config.address, sizeof(address.sun_path));
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == -1)
+    {
+        ERROR("Unable to create Unix domain socket: %s", strerror(errno));
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr *)(&address), sizeof(address)) == -1)
+    {
+        ERROR("Unable to bind name: %s to a socket: %s", address.sun_path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    // mark the socket as passive mode
+
+    if (listen(fd, MAX_BACK_LOG) == -1)
+    {
+        ERROR("Unable to listen to socket: %d (%s): %s", fd, g_config.address, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    LOG("Socket %s is created successfully: %d", g_config.address, fd);
+    return fd;
+}
+static int mk_tcp_socket()
+{
+    int fd = -1;
+    struct sockaddr_in name;
+    fd = socket(PF_INET, SOCK_STREAM, 0);
+    if (fd == -1)
+    {
+        ERROR("Unable to create TCP socket socket: %s", strerror(errno));
+        return -1;
+    }
+
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1)
+    {
+        ERROR("Unable to set reuse address on port %d - setsockopt: %s", g_config.port, strerror(errno));
+    }
+
+    memset(&name, 0, sizeof(name));
+    name.sin_family = AF_INET;
+    name.sin_port = htons(g_config.port);
+    name.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(fd, (struct sockaddr *)&name, sizeof(name)) < 0)
+    {
+        ERROR("Unable to bind TCP socket at port %d -bind: %s", g_config.port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    
+    if (listen(fd, MAX_BACK_LOG) < 0)
+    {
+        ERROR("Unable to listen on Port %d - listen: %s", g_config.port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 static int open_un_socket()
 {
     struct sockaddr_un address;
@@ -171,6 +295,18 @@ static int open_socket()
     }
 }
 
+static int mk_socket()
+{
+    if(g_config.port != -1)
+    {
+        return mk_tcp_socket();
+    }
+    else
+    {
+        return mk_un_socket();
+    }
+}
+
 void init()
 {
     use_raw_body();
@@ -184,15 +320,22 @@ void init()
 }
 void destroy()
 {
-    /*if(g_config.fd)
+    if(g_config.pid > 0)
     {
-        LOG("Close socket: %d", g_config.fd);
+        LOG("Process killed: %d", g_config.pid);
+        (void)kill(g_config.pid, SIGKILL);
+        g_config.pid = -1;
+    }
+    if(g_config.fd > 0)
+    {
+        LOG("Close server socket: %d", g_config.fd);
         close(g_config.fd);
-    }*/
+        g_config.fd = -1;
+    }
 }
 
 
-char* read_line(char** buff, int* size)
+static char* read_line(char** buff, int* size)
 {
     int i = 0;
     while(i <= *size-1 && (*buff)[i] != '\n') i++;
@@ -366,6 +509,18 @@ static void *process(void *data)
     antd_request_t *rq = (antd_request_t *)data;
     antd_client_t* cl = (antd_client_t* ) dvalue(rq->request, "FCGI_CL_DATA");
     struct pollfd pfds[2];
+    int status;
+    if(g_config.pid > 0)
+    {
+        if(waitpid(g_config.pid, &status, WNOHANG) > 0)
+        {
+            PLUGIN_PANIC("FastCGI process exits unexpectedly");
+            antd_close(cl);
+            dput(rq->request, "FCGI_CL_DATA", NULL);
+            return antd_create_task(NULL, data, NULL, rq->client->last_io);
+        }
+    }
+
     pfds[0].fd = rq->client->sock;
     pfds[0].events = POLLIN;
     if(rq->client->ssl)
@@ -488,7 +643,11 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     dictionary_t header = (dictionary_t)dvalue(rq->request, "REQUEST_HEADER");
     ret += fcgi_begin_request(cl, cl->sock, FCGI_RESPONDER, 0);
     //ret += fcgi_send_param(cl, cl->sock, "", "");
-
+    // ANTD specific params
+    ret += fcgi_send_param(cl, cl->sock, "TMP_DIR", __plugin__.tmpdir);
+    ret += fcgi_send_param(cl, cl->sock, "DB_DIR", __plugin__.dbpath);
+    ret += fcgi_send_param(cl, cl->sock, "LIB_DIR", __plugin__.pdir);
+    // CGI parms
     ret += fcgi_send_param(cl, cl->sock, "GATEWAY_INTERFACE", "CGI/1.1");
     ret += fcgi_send_param(cl, cl->sock, "SERVER_SOFTWARE", SERVER_NAME);
     root = (char *)dvalue(request, "SERVER_WWW_ROOT");
