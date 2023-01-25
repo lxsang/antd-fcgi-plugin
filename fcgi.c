@@ -637,7 +637,6 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
 {
     int ret = 0;
     char *tmp = NULL;
-    char *sub = NULL;
     char *root;
     dictionary_t request = (dictionary_t)rq->request;
     dictionary_t header = (dictionary_t)dvalue(rq->request, "REQUEST_HEADER");
@@ -651,6 +650,18 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     ret += fcgi_send_param(cl, cl->sock, "GATEWAY_INTERFACE", "CGI/1.1");
     ret += fcgi_send_param(cl, cl->sock, "SERVER_SOFTWARE", SERVER_NAME);
     root = (char *)dvalue(request, "SERVER_WWW_ROOT");
+    tmp = (char *)dvalue(request, "REQUEST_URI");
+    if (!tmp)
+    {
+        ret += fcgi_send_param(cl, cl->sock, "PATH_INFO", "");
+        ret += fcgi_send_param(cl, cl->sock, "REQUEST_URI", "");
+    }
+    else
+    {
+        ret += fcgi_send_param(cl, cl->sock, "PATH_INFO", tmp);
+        ret += fcgi_send_param(cl, cl->sock, "REQUEST_URI", tmp);
+    }
+
     tmp = (char *)dvalue(request, "REQUEST_QUERY");
     
     if (!tmp)
@@ -659,18 +670,9 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     }
     else
     {
-        ret += fcgi_send_param(cl, cl->sock, "REQUEST_URI", tmp);
-        sub = strchr(tmp, '?');
-        if (sub)
-        {
-            sub++;
-            ret += fcgi_send_param(cl, cl->sock, "QUERY_STRING", sub);
-        }
-        else
-        {
-            ret += fcgi_send_param(cl, cl->sock, "QUERY_STRING", "");
-        }
+        ret += fcgi_send_param(cl, cl->sock, "QUERY_STRING", tmp);
     }
+
     tmp = (char *)dvalue(request, "METHOD");
     if (tmp)
     {
@@ -696,25 +698,6 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
         ret += fcgi_send_param(cl, cl->sock, "CONTENT_LENGTH", "");
     }
     ret += fcgi_send_param(cl, cl->sock, "DOCUMENT_ROOT", root);
-    tmp = (char *)dvalue(request, "REQUEST_PATH");
-    if (tmp)
-    {
-        sub = tmp;
-        while (*sub == '/')
-            sub++;
-        if (sub)
-        {
-            ret += fcgi_send_param(cl, cl->sock, "PATH_INFO", sub);
-        }
-        else
-        {
-            ret += fcgi_send_param(cl, cl->sock, "PATH_INFO", "");
-        }
-    }
-    else
-    {
-        ret += fcgi_send_param(cl, cl->sock, "PATH_INFO", "");
-    }
     tmp = (char *)dvalue(request, "REMOTE_ADDR");
     if(tmp)
     {
@@ -746,10 +729,10 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     if (tmp)
     {
         ret += fcgi_send_param(cl, cl->sock, "SCRIPT_NAME", basename(tmp));
-        tmp = __s("%s/%s", root, tmp);
+        //tmp = __s("%s/%s", root, tmp);
         ret += fcgi_send_param(cl, cl->sock, "SCRIPT_FILENAME", tmp);
         ret += fcgi_send_param(cl, cl->sock, "PATH_TRANSLATED", tmp);
-        free(tmp);
+        //free(tmp);
     }
     else
     {
