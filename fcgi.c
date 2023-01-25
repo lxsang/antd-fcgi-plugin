@@ -389,7 +389,7 @@ static int read_header(antd_client_t* cl, antd_request_t* rq)
                             antd_send_header(rq->client, &rhd);
                             if(ret > 0)
                             {
-                                if(antd_send(rq->client,ptr, ret) != ret)
+                                if(antd_send(rq->client,ptr, ret) != ret && rq->client->z_level == ANTD_CNONE)
                                 {
                                     (void)fcgi_abort_request(cl, cl->sock);
                                     ERROR("Error atnd_send(): %s", strerror(errno));
@@ -477,7 +477,13 @@ static int read_data(antd_client_t* cl, antd_request_t* rq)
             // write data to the other side
             if(payload && ret > 0)
             {
-                if(antd_send(rq->client,payload, ret) != ret)
+                /**
+                 * antd_send may return fewer bytes than `ret`
+                 * this does not mean error, as the output stream
+                 * maybe compressed by gzip
+                 * 
+                 */
+                if(antd_send(rq->client,payload, ret) != ret && rq->client->z_level == ANTD_CNONE)
                 {
                     (void)fcgi_abort_request(cl, cl->sock);
                     ERROR("Error atnd_send(): %s", strerror(errno));
@@ -769,7 +775,7 @@ void* handle(void* data)
     cl->z_status = 0;
     cl->z_level = ANTD_CNONE;
     cl->zstream = NULL;
-    rq->client->z_level = ANTD_CNONE;
+    //rq->client->z_level = ANTD_CNONE;
 
     // start the request
     
