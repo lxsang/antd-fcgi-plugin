@@ -676,6 +676,7 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     }
     else
     {
+        // LOG("FCGI SEND QUERY STRING: %s", tmp);
         ret += fcgi_send_param(cl, cl->sock, "QUERY_STRING", tmp);
     }
 

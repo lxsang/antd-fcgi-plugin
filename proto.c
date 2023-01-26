@@ -154,7 +154,7 @@ int fcgi_send_param(antd_client_t* cl, int id, const char* key, const char* valu
     
     if(clen > 0)
     {
-        uint8_t encoding_type = (((k_length & 0xFF) >> 7) << 0) | (((v_length & 0xFF)>>7) << 1);
+        uint8_t encoding_type = ((k_length>127?1:0) << 0) | ((v_length>127?1:0) << 1);
         switch(encoding_type)
         {
             case PARAMS_LENGTH_11:
