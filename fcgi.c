@@ -584,7 +584,7 @@ static void *process(void *data)
                     }
                     if(cl->state > 0)
                         cl->state -= ret;
-                    LOG("sending %s: %d", buff, cl->state);
+                    //LOG("sending %s: %d", buff, cl->state);
                 }
                 if(ret < 0)
                 {
