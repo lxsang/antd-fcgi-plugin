@@ -470,10 +470,11 @@ static int read_data(antd_client_t* cl, antd_request_t* rq)
         LOG("fcgi_read_header() on %d: %s", cl->sock, strerror(errno));
         return -1;
     }
-    uint8_t * payload = fcgi_read_payload(cl, &header, &ret);
+    uint8_t * payload = NULL;
     switch(header.type)
     {
         case FCGI_STDOUT:
+            payload = fcgi_read_payload(cl, &header, &ret);
             // write data to the other side
             if(payload && ret > 0)
             {
@@ -493,6 +494,7 @@ static int read_data(antd_client_t* cl, antd_request_t* rq)
             }
             break;
         case FCGI_STDERR:
+            payload = fcgi_read_payload(cl, &header, &ret);
             if(payload && ret > 0)
             {
                 ERROR("%s", (char*) payload);
@@ -763,7 +765,7 @@ void* handle(void* data)
         antd_error(rq->client, 503, "Service unavailable");
         return antd_create_task(NULL, data, NULL, rq->client->last_io);
     }
-    set_nonblock(fd);
+    //set_nonblock(fd);
 
     // write all header to fastCGI server via params
     antd_client_t* cl = (antd_client_t*) malloc(sizeof(antd_client_t));
