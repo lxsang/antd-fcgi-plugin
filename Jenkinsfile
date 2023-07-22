@@ -6,7 +6,7 @@ def build_plugin()
   cd $WORKSPACE
   echo "Building for architecture $arch"
   mkdir -p build/$arch/opt/www
-  [ -f Makefile ] && make clean
+  [ -f Makefile ] && make clean || true
   libtoolize
   aclocal
   autoconf
