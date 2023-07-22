@@ -1,7 +1,8 @@
 def build_plugin()
 {
   sh '''
-  set -ex
+  set -e
+  set +x
   cd $WORKSPACE
   mkdir -p build/$arch/opt/www
   [ -f Makefile ] && make clean
