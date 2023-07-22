@@ -4,6 +4,7 @@ def build_plugin()
   set -e
   set +x
   cd $WORKSPACE
+  echo "Building for architecture $arch"
   mkdir -p build/$arch/opt/www
   [ -f Makefile ] && make clean
   libtoolize
