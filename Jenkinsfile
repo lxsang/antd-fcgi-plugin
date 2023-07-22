@@ -9,7 +9,10 @@ def build_plugin()
   aclocal
   autoconf
   automake --add-missing
-  search_path=$(realpath antd/build/$arch/usr)
+  path="antd/build/$arch/usr"
+  search_path=$(realpath "$path")
+  echo "PATH: $path"
+  echo "REAL PATH: $search_path"
   CFLAGS="-I$search_path/include" LDFLAGS="-L$search_path/lib" ./configure  --prefix=/opt/www
   CFLAGS="-I$search_path/include" LDFLAGS="-L$search_path/lib" make
   DESTDIR=$WORKSPACE/build/$arch make install
