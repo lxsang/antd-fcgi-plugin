@@ -64,7 +64,7 @@ static int fcgi_send_record(antd_client_t* cl, FCGI_Header* header, uint8_t* buf
     int ret = antd_send(cl, (uint8_t*)header, sizeof(FCGI_Header));
     if(ret != sizeof(FCGI_Header))
     {
-        ERROR("fcgi_send_record: Unable to send record header, only %d of %d bytes sent: %s", ret, sizeof(FCGI_Header), strerror(errno));
+        ERROR("fcgi_send_record: Unable to send record header, only %d of %lu bytes sent: %s", ret, sizeof(FCGI_Header), strerror(errno));
         return -1;
     }
     if(!buff)
@@ -75,7 +75,7 @@ static int fcgi_send_record(antd_client_t* cl, FCGI_Header* header, uint8_t* buf
     ret = antd_send(cl, (uint8_t*)buff, len);
     if(ret != (int)len)
     {
-        ERROR("fcgi_send_record: Unable to send record data, only %d of %d bytes sent", ret, len);
+        ERROR("fcgi_send_record: Unable to send record data, only %d of %d bytes sent", ret, (int)len);
         return -1;
     }
     return 0;
@@ -84,6 +84,7 @@ static int fcgi_send_record(antd_client_t* cl, FCGI_Header* header, uint8_t* buf
 int fcgi_begin_request(antd_client_t* cl, uint16_t id, uint16_t role, uint8_t flags)
 {
     FCGI_BeginRequestRecord record;
+    memset(&record, 0, sizeof(record));
     record.header.version = FCGI_VERSION_1;
     record.header.type = FCGI_BEGIN_REQUEST;
     record.header.requestIdB1 = id >> 8;
@@ -99,7 +100,7 @@ int fcgi_begin_request(antd_client_t* cl, uint16_t id, uint16_t role, uint8_t fl
     int ret = antd_send(cl, (uint8_t*)&record, sizeof(record));
     if(ret != sizeof(record))
     {
-        ERROR("fcgi_begin_request: Unable to send record data, only %d of %d bytes sent", ret, sizeof(record));
+        ERROR("fcgi_begin_request: Unable to send record data, only %d of %lu bytes sent", ret, sizeof(record));
         return -1;
     }
     return 0;
@@ -108,6 +109,7 @@ int fcgi_begin_request(antd_client_t* cl, uint16_t id, uint16_t role, uint8_t fl
 int fcgi_abort_request(antd_client_t* cl, uint16_t id)
 {
     FCGI_Header header;
+    memset(&header, 0, sizeof(header));
     header.version = FCGI_VERSION_1;
     header.type = FCGI_BEGIN_REQUEST;
     header.requestIdB1 = id >> 8;
@@ -118,7 +120,7 @@ int fcgi_abort_request(antd_client_t* cl, uint16_t id)
     int ret = antd_send(cl, (uint8_t*)&header, sizeof(header));
     if(ret != sizeof(header))
     {
-        ERROR("fcgi_abort_request: Unable to send record data, only %d of %d bytes sent", ret, sizeof(header));
+        ERROR("fcgi_abort_request: Unable to send record data, only %d of %lu bytes sent", ret, sizeof(header));
         return -1;
     }
     return 0;
@@ -137,6 +139,7 @@ int fcgi_send_param(antd_client_t* cl, int id, const char* key, const char* valu
         size_t max_buff_len = sizeof(FCGI_Params_Body) + k_length + v_length + 8;
 
         buff = (uint8_t*)malloc(max_buff_len);
+        memset(buff, 0, max_buff_len);
         if(!buff)
         {
             ERROR("Unable to allocate PARAMS record buffer memory: %s", strerror(errno));
@@ -147,6 +150,7 @@ int fcgi_send_param(antd_client_t* cl, int id, const char* key, const char* valu
     body = (FCGI_Params_Body*) buff;
 
     FCGI_Header header;
+    memset(&header, 0, sizeof(header));
     header.version = FCGI_VERSION_1;
     header.type = FCGI_PARAMS;
     header.requestIdB1 = id >> 8;
@@ -221,6 +225,7 @@ int fcgi_send_param(antd_client_t* cl, int id, const char* key, const char* valu
 int fcgi_send_stdin(antd_client_t* cl, int id, uint8_t* padded_data, size_t len, uint8_t paddlen)
 {
     FCGI_Header header;
+    memset(&header, 0, sizeof(header));
     header.version = FCGI_VERSION_1;
     header.type = FCGI_STDIN;
     header.requestIdB1 = id >> 8;
@@ -228,6 +233,7 @@ int fcgi_send_stdin(antd_client_t* cl, int id, uint8_t* padded_data, size_t len,
     header.contentLengthB1 = len >> 8;
     header.contentLengthB0 = len & 0xFF;
     header.paddingLength = paddlen;
+    header.reserved = 0;
     // send the record
     return fcgi_send_record(cl, &header, padded_data, len + paddlen);
 }
@@ -239,7 +245,7 @@ int fcgi_read_header(antd_client_t* cl, FCGI_Header* header)
     int ret = antd_recv(cl, buff, sizeof(FCGI_Header));
     if(ret != sizeof(FCGI_Header))
     {
-        ERROR("Unable to read header: received %d bytes out of %d bytes", ret, sizeof(FCGI_Header));
+        ERROR("Unable to read header: received %d bytes out of %lu bytes", ret, sizeof(FCGI_Header));
         return -1;
     }
     return 0;

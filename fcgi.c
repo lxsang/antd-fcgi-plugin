@@ -1,4 +1,3 @@
-#define PLUGIN_IMPLEMENT 1
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -19,7 +18,7 @@
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-
+#include <antd/plugin.h>
 //#include <libgen.h>
 #include "proto.h"
 
@@ -47,106 +46,105 @@ typedef struct {
     pid_t pid;
 } fcgi_config_t;
 
-static fcgi_config_t g_config;
-
-static int mk_socket();
-static int read_config();
-static int open_un_socket();
-static int open_tcp_socket();
-static int open_socket();
+static int mk_socket(fcgi_config_t* config);
+static int read_config(fcgi_config_t* config,antd_plugin_ctx_t* p_config);
+static int open_un_socket(fcgi_config_t* config);
+static int open_tcp_socket(fcgi_config_t* config);
+static int open_socket(fcgi_config_t* config);
 static char* read_line(char** buff, int* size);
 static int read_header(antd_client_t* cl, antd_request_t* rq);
 static int read_data(antd_client_t* cl, antd_request_t* rq);
 static void *process(void *data);
 static int send_request(antd_client_t *cl, antd_request_t* rq);
 void* handle(void* data);
-static int mk_un_socket();
-static int mk_tcp_socket();
+static int mk_un_socket(fcgi_config_t* config);
+static int mk_tcp_socket(fcgi_config_t* config);
 
-static int read_config()
+static int read_config(fcgi_config_t* config, antd_plugin_ctx_t* ctx)
 {
     char * tmp;
-    (void*) memset(g_config.app_bin, 0, MAX_PATH_LEN);
-    (void*) memset(g_config.address, 0, MAX_PATH_LEN);
-    g_config.port = -1;
-    g_config.fd = -1;
-    g_config.pid = -1;
+    (void*) memset(config->app_bin, 0, MAX_PATH_LEN);
+    (void*) memset(config->address, 0, MAX_PATH_LEN);
+    dictionary_t p_config = antd_plugin_config(ctx);
+    config->port = -1;
+    config->fd = -1;
+    config->pid = -1;
     regmatch_t regex_matches[3];
     // read plugin configuration
-    if(!__plugin__.config)
+    if(!p_config)
     {
-        PLUGIN_PANIC("No plugin configuration found. Please specify it in server config file");
+        PLUGIN_PANIC(ctx, "No plugin configuration found. Please specify it in server config file");
         return -1;
     }
-    tmp = (char*) dvalue(__plugin__.config, "socket");
+    tmp = (char*) dvalue(p_config, "socket");
     if(!tmp)
     {
-        PLUGIN_PANIC("No socket configuration found (socket)");
+        PLUGIN_PANIC(ctx, "No socket configuration found (socket)");
         return -1;
     }
     if(strncmp(tmp,"unix:", 5) == 0)
     {
         if(strlen(tmp + 5) > MAX_PATH_LEN - 1)
         {
-            PLUGIN_PANIC("socket configuration is too long: %s", tmp);
+            PLUGIN_PANIC(ctx, "socket configuration is too long: %s", tmp);
             return -1;
         }
-        snprintf(g_config.address, MAX_PATH_LEN,"%s", tmp+5);
-        LOG("Found Unix domain socket configuration: %s", g_config.address);
+        snprintf(config->address, MAX_PATH_LEN,"%s", tmp+5);
+        LOG("Found Unix domain socket configuration: %s", config->address);
     }
     else if(regex_match("^([a-zA-Z0-9\\-_\\.]+):([0-9]+)$", tmp,3, regex_matches))
     {
         if(regex_matches[1].rm_eo - regex_matches[1].rm_so > MAX_PATH_LEN - 1)
         {
-            PLUGIN_PANIC("socket configuration is too long: %s", tmp);
+            PLUGIN_PANIC(ctx, "socket configuration is too long: %s", tmp);
             return -1;
         }
-        memcpy(g_config.address, tmp + regex_matches[2].rm_so, regex_matches[2].rm_eo - regex_matches[2].rm_so);
-        g_config.port = atoi(g_config.address);
-        (void*) memset(g_config.address, 0, MAX_PATH_LEN);
-        memcpy(g_config.address, tmp + regex_matches[1].rm_so, regex_matches[1].rm_eo - regex_matches[1].rm_so);
-        LOG("Found TCP socket configuration: %s:%d", g_config.address, g_config.port);
+        memcpy(config->address, tmp + regex_matches[2].rm_so, regex_matches[2].rm_eo - regex_matches[2].rm_so);
+        config->port = atoi(config->address);
+        (void*) memset(config->address, 0, MAX_PATH_LEN);
+        memcpy(config->address, tmp + regex_matches[1].rm_so, regex_matches[1].rm_eo - regex_matches[1].rm_so);
+        LOG("Found TCP socket configuration: %s:%d", config->address, config->port);
     }
     else
     {
-        PLUGIN_PANIC("Unknown socket configuration: %s", tmp);
+        PLUGIN_PANIC(ctx, "Unknown socket configuration: %s", tmp);
         return -1;
     }
-    tmp = (char*) dvalue(__plugin__.config, "bin");
+    tmp = (char*) dvalue(p_config, "bin");
     if(tmp)
     {
         if(strlen(tmp) > MAX_PATH_LEN - 1)
         {
-            PLUGIN_PANIC("Bin application configuration is too long: %s", tmp);
+            PLUGIN_PANIC(ctx, "Bin application configuration is too long: %s", tmp);
             return -1;
         }
-        snprintf(g_config.app_bin, MAX_PATH_LEN,"%s", tmp);
-        LOG("Binary application configuration: %s", g_config.app_bin);
+        snprintf(config->app_bin, MAX_PATH_LEN,"%s", tmp);
+        LOG("Binary application configuration: %s", config->app_bin);
         // create the server socket then launched it
-        g_config.fd = mk_socket();
-        if(g_config.fd == -1)
+        config->fd = mk_socket(config);
+        if(config->fd == -1)
         {
-            PLUGIN_PANIC("Unable to create FastCGI server socket");
+            PLUGIN_PANIC(ctx, "Unable to create FastCGI server socket");
             return -1;
         }
         // launch the application
-        g_config.pid = fork();
-        if(g_config.pid == -1)
+        config->pid = fork();
+        if(config->pid == -1)
         {
-            PLUGIN_PANIC("Unable to create FastCGI server socket");
-            close(g_config.fd);
-            g_config.fd = -1;
-            g_config.pid = -1;
+            PLUGIN_PANIC(ctx, "Unable to create FastCGI server socket");
+            close(config->fd);
+            config->fd = -1;
+            config->pid = -1;
             return -1;
         }
-        if(g_config.pid == 0)
+        if(config->pid == 0)
         {
             // child
             // close the original stdin
             close(0);
             // redirect the stdin to the socket
-            dup2(g_config.fd, 0);
-            char *argv[] = {g_config.app_bin, 0};
+            dup2(config->fd, 0);
+            char *argv[] = {config->app_bin, 0};
             char *env[] = {NULL, NULL};
             env[0] = getenv("ANTD_DEBUG");
             if(env[0] && (
@@ -162,19 +160,19 @@ static int read_config()
             _exit(1);
         }
         // parent
-        LOG("FastCGI process (%d) created", g_config.pid);
+        LOG("FastCGI process (%d) created", config->pid);
     }
     return 0;
 }
 
-static int mk_un_socket()
+static int mk_un_socket(fcgi_config_t* config)
 {
     struct sockaddr_un address;
     address.sun_family = AF_UNIX;
     //remove socket file if exists
-    (void) remove(g_config.address);
+    (void) remove(config->address);
     // create the socket
-    (void)strncpy(address.sun_path, g_config.address, sizeof(address.sun_path));
+    (void)strncpy(address.sun_path, config->address, sizeof(address.sun_path));
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd == -1)
     {
@@ -191,14 +189,14 @@ static int mk_un_socket()
 
     if (listen(fd, MAX_BACK_LOG) == -1)
     {
-        ERROR("Unable to listen to socket: %d (%s): %s", fd, g_config.address, strerror(errno));
+        ERROR("Unable to listen to socket: %d (%s): %s", fd, config->address, strerror(errno));
         close(fd);
         return -1;
     }
-    LOG("Socket %s is created successfully: %d", g_config.address, fd);
+    LOG("Socket %s is created successfully: %d", config->address, fd);
     return fd;
 }
-static int mk_tcp_socket()
+static int mk_tcp_socket(fcgi_config_t* config)
 {
     int fd = -1;
     struct sockaddr_in name;
@@ -211,35 +209,35 @@ static int mk_tcp_socket()
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1)
     {
-        ERROR("Unable to set reuse address on port %d - setsockopt: %s", g_config.port, strerror(errno));
+        ERROR("Unable to set reuse address on port %d - setsockopt: %s", config->port, strerror(errno));
     }
 
     memset(&name, 0, sizeof(name));
     name.sin_family = AF_INET;
-    name.sin_port = htons(g_config.port);
+    name.sin_port = htons(config->port);
     name.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(fd, (struct sockaddr *)&name, sizeof(name)) < 0)
     {
-        ERROR("Unable to bind TCP socket at port %d -bind: %s", g_config.port, strerror(errno));
+        ERROR("Unable to bind TCP socket at port %d -bind: %s", config->port, strerror(errno));
         close(fd);
         return -1;
     }
     
     if (listen(fd, MAX_BACK_LOG) < 0)
     {
-        ERROR("Unable to listen on Port %d - listen: %s", g_config.port, strerror(errno));
+        ERROR("Unable to listen on Port %d - listen: %s", config->port, strerror(errno));
         close(fd);
         return -1;
     }
     return fd;
 }
 
-static int open_un_socket()
+static int open_un_socket(fcgi_config_t* config)
 {
     struct sockaddr_un address;
     address.sun_family = AF_UNIX;
     // create the socket
-    (void)strncpy(address.sun_path, g_config.address, sizeof(address.sun_path));
+    (void)strncpy(address.sun_path, config->address, sizeof(address.sun_path));
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd == -1)
     {
@@ -252,17 +250,17 @@ static int open_un_socket()
         close(fd);
         return -1;
     }
-    LOG("Connected to FastCGI server at %s: %d", g_config.address, fd);
+    LOG("Connected to FastCGI server at %s: %d", config->address, fd);
     return fd;
 }
 
-static int open_tcp_socket()
+static int open_tcp_socket(fcgi_config_t* config)
 {
     struct sockaddr_in servaddr;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == -1)
     {
-        PLUGIN_PANIC("Cannot create TCP socket %s:d: %s",g_config.address, g_config.port, strerror(errno));
+        ERROR("Cannot create TCP socket %s:%d: %s",config->address, config->port, strerror(errno));
         return -1;
     }
     
@@ -270,68 +268,76 @@ static int open_tcp_socket()
  
     // assign IP, PORT
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = inet_addr(g_config.address);
-    servaddr.sin_port = htons(g_config.port);
+    servaddr.sin_addr.s_addr = inet_addr(config->address);
+    servaddr.sin_port = htons(config->port);
  
     // connect the client socket to server socket
     if (connect(fd, (struct sockaddr*)&servaddr, sizeof(servaddr))!= 0) {
-        ERROR( "Unable to connect to socket '%s:%d': %s", g_config.address, g_config.port, strerror(errno));
+        ERROR( "Unable to connect to socket '%s:%d': %s", config->address, config->port, strerror(errno));
         close(fd);
         return -1;
     }
-    LOG("Connected to server: %s:%d at [%d]", g_config.address, g_config.port, fd);
+    LOG("Connected to server: %s:%d at [%d]", config->address, config->port, fd);
     return fd;
 }
 
-static int open_socket()
+static int open_socket(fcgi_config_t* config)
 {
-    if(g_config.port != -1)
+    if(config->port != -1)
     {
-        return open_tcp_socket();
+        return open_tcp_socket(config);
     }
     else
     {
-        return open_un_socket();
+        return open_un_socket(config);
     }
 }
 
-static int mk_socket()
+static int mk_socket(fcgi_config_t* config)
 {
-    if(g_config.port != -1)
+    if(config->port != -1)
     {
-        return mk_tcp_socket();
+        return mk_tcp_socket(config);
     }
     else
     {
-        return mk_un_socket();
+        return mk_un_socket(config);
     }
 }
 
-void init()
+void* create(antd_plugin_ctx_t* ctx)
 {
-    use_raw_body();
-    if(read_config() != 0)
-        return;
-    // create the socket
-    //if(create_socket() != 0)
-    //    return;
+    fcgi_config_t* conf = (fcgi_config_t*) malloc(sizeof(fcgi_config_t));
+    if(!conf)
+    {
+        PLUGIN_PANIC(ctx, "Unable to allocate memory for plugin config");
+        return NULL;
+    }
+    antd_plugin_use_raw_body(ctx);
+    if(read_config(conf, ctx) != 0)
+    {
+        free(conf);
+        return NULL;
+    }
     LOG("FastCGI init successful");
-
+    return conf;
 }
-void destroy()
+void drop(antd_plugin_ctx_t* ctx)
 {
-    if(g_config.pid > 0)
+    fcgi_config_t* config = (fcgi_config_t*)antd_plugin_data(ctx);
+    if(config->pid > 0)
     {
-        LOG("Process killed: %d", g_config.pid);
-        (void)kill(g_config.pid, SIGKILL);
-        g_config.pid = -1;
+        LOG("Process killed: %d", config->pid);
+        (void)kill(config->pid, SIGKILL);
+        config->pid = -1;
     }
-    if(g_config.fd > 0)
+    if(config->fd > 0)
     {
-        LOG("Close server socket: %d", g_config.fd);
-        close(g_config.fd);
-        g_config.fd = -1;
+        LOG("Close server socket: %d", config->fd);
+        close(config->fd);
+        config->fd = -1;
     }
+    free(config);
 }
 
 
@@ -515,14 +521,21 @@ static int read_data(antd_client_t* cl, antd_request_t* rq)
 static void *process(void *data)
 {
     antd_request_t *rq = (antd_request_t *)data;
+    antd_plugin_ctx_t* ctx = rq->context;
+    fcgi_config_t* config = antd_plugin_data(ctx);
     antd_client_t* cl = (antd_client_t* ) dvalue(rq->request, "FCGI_CL_DATA");
     struct pollfd pfds[2];
     int status;
-    if(g_config.pid > 0)
+    if(config == NULL)
     {
-        if(waitpid(g_config.pid, &status, WNOHANG) > 0)
+        PLUGIN_PANIC(ctx, "No plugin context configuration found");
+        return antd_create_task(NULL, data, NULL, rq->client->last_io);
+    }
+    if(config->pid > 0)
+    {
+        if(waitpid(config->pid, &status, WNOHANG) > 0)
         {
-            PLUGIN_PANIC("FastCGI process exits unexpectedly");
+            PLUGIN_PANIC(ctx, "FastCGI process exits unexpectedly");
             antd_close(cl);
             dput(rq->request, "FCGI_CL_DATA", NULL);
             return antd_create_task(NULL, data, NULL, rq->client->last_io);
@@ -647,13 +660,13 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
     char *tmp = NULL;
     char *root;
     dictionary_t request = (dictionary_t)rq->request;
+    antd_plugin_ctx_t* ctx = rq->context;
     dictionary_t header = (dictionary_t)dvalue(rq->request, "REQUEST_HEADER");
     ret += fcgi_begin_request(cl, cl->sock, FCGI_RESPONDER, 0);
     //ret += fcgi_send_param(cl, cl->sock, "", "");
     // ANTD specific params
-    ret += fcgi_send_param(cl, cl->sock, "TMP_DIR", __plugin__.tmpdir);
-    ret += fcgi_send_param(cl, cl->sock, "DB_DIR", __plugin__.dbpath);
-    ret += fcgi_send_param(cl, cl->sock, "LIB_DIR", __plugin__.pdir);
+    ret += fcgi_send_param(cl, cl->sock, "TMP_DIR", antd_plugin_tmpdir(ctx));
+    ret += fcgi_send_param(cl, cl->sock, "LIB_DIR", antd_plugin_basedir(ctx));
     // CGI parms
     ret += fcgi_send_param(cl, cl->sock, "GATEWAY_INTERFACE", "CGI/1.1");
     ret += fcgi_send_param(cl, cl->sock, "SERVER_SOFTWARE", SERVER_NAME);
@@ -758,8 +771,15 @@ static int send_request(antd_client_t *cl, antd_request_t* rq)
 void* handle(void* data)
 {
     antd_request_t *rq = (antd_request_t *)data;
+    antd_plugin_ctx_t* ctx = rq->context;
+    fcgi_config_t* conf = antd_plugin_data(ctx);
+    if(conf == NULL)
+    {
+        PLUGIN_PANIC(ctx, "No plugin context configuration found");
+        return antd_create_task(NULL, data, NULL, rq->client->last_io);
+    }
     // connect to socket
-    int fd = open_socket();
+    int fd = open_socket(conf);
     if(fd < 0)
     {
         antd_error(rq->client, 503, "Service unavailable");
